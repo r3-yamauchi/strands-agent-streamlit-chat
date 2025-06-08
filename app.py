@@ -15,6 +15,7 @@ import yaml
 from mcp import StdioServerParameters, stdio_client
 from strands import Agent
 from strands.models import BedrockModel
+from strands.models.openai import OpenAIModel
 from strands.tools.mcp import MCPClient
 from strands.tools.mcp.mcp_agent_tool import MCPAgentTool
 from strands.types.content import ContentBlock, Message, Messages
@@ -91,6 +92,80 @@ def convert_messages(messages: Messages, enable_cache: bool):
     return messages_with_cache_point
 
 
+def initialize_model(provider: str, model_id: str, config: dict, enable_cache: dict):
+    """
+    プロバイダーに応じたモデルを初期化
+    
+    Args:
+        provider: モデルプロバイダー ("openai" or "bedrock")
+        model_id: モデルID
+        config: 設定辞書
+        enable_cache: キャッシュ設定
+    
+    Returns:
+        初期化されたモデルインスタンス
+    """
+    if provider == "openai":
+        api_key = os.getenv("OPENAI_API_KEY")
+        if not api_key:
+            st.error("🔑 OPENAI_API_KEY が設定されていません。.env ファイルを確認してください。")
+            st.stop()
+            
+        model_config = config["providers"]["openai"]["models"].get(model_id, {})
+        return OpenAIModel(
+            client_args={"api_key": api_key},
+            model_id=model_id,
+            params={
+                "max_tokens": model_config.get("max_tokens", 4000),
+                "temperature": st.session_state.get("temperature", 0.7)
+            }
+        )
+    
+    elif provider == "bedrock":
+        bedrock_region = config["providers"]["bedrock"]["region"]
+        return BedrockModel(
+            model_id=model_id,
+            boto_session=boto3.Session(region_name=bedrock_region),
+            cache_prompt="default" if enable_cache.get("system") else None,
+            cache_tools="default" if enable_cache.get("tools") else None,
+        )
+    
+    else:
+        raise ValueError(f"Unknown provider: {provider}")
+
+
+def get_model_capabilities(provider: str, model_id: str, config: dict) -> dict:
+    """
+    モデルの機能を取得
+    
+    Args:
+        provider: モデルプロバイダー
+        model_id: モデルID
+        config: 設定辞書
+    
+    Returns:
+        モデルの機能辞書
+    """
+    if provider == "openai":
+        model_config = config["providers"]["openai"]["models"].get(model_id, {})
+        return {
+            "image_support": model_config.get("image_support", False),
+            "cache_support": [],  # OpenAIはキャッシュ非対応
+            "streaming": True,
+            "tools": True
+        }
+    elif provider == "bedrock":
+        model_config = config["providers"]["bedrock"]["models"].get(model_id, {})
+        return {
+            "image_support": model_config.get("image_support", False),
+            "cache_support": model_config.get("cache_support", []),
+            "streaming": True,
+            "tools": True
+        }
+    else:
+        return {}
+
+
 async def main():
     """
     Streamlitアプリケーションのメイン関数。チャットインターフェースの設定、
@@ -104,16 +179,50 @@ async def main():
     with open("config/config.json", "r") as f:
         config = json.load(f)
 
-    models = config["models"]
-    bedrock_region = config["bedrock_region"]
+    # デフォルトプロバイダーの設定
+    default_provider = os.getenv("DEFAULT_PROVIDER", "openai").lower()
 
     def select_chat(chat_history_file):
         st.session_state.chat_history_file = chat_history_file
 
     with st.sidebar:
         with st.expander(":gear: config", expanded=True):
-            st.selectbox("LLM model", models.keys(), key="model_id")
-            st.checkbox("Enable prompt cache", value=True, key="enable_prompt_cache")
+            # プロバイダー選択
+            provider = st.selectbox(
+                "🏢 Provider",
+                ["OpenAI", "Amazon Bedrock"],
+                index=0 if default_provider == "openai" else 1,
+                key="provider"
+            )
+            
+            # プロバイダー別モデル表示
+            provider_key = provider.lower().replace(" ", "")
+            if provider_key == "amazonbedrock":
+                provider_key = "bedrock"
+            
+            if provider_key in config["providers"]:
+                models = config["providers"][provider_key]["models"]
+                model_id = st.selectbox(
+                    "🤖 Model",
+                    list(models.keys()),
+                    format_func=lambda x: models[x].get("display_name", x),
+                    key="model_id"
+                )
+                
+                # モデルの機能を取得
+                capabilities = get_model_capabilities(provider_key, model_id, config)
+                
+                # OpenAI特有の設定
+                if provider == "OpenAI":
+                    st.slider("Temperature", 0.0, 2.0, 0.7, 0.1, key="temperature")
+                    if not capabilities["cache_support"]:
+                        st.info("ℹ️ OpenAIモデルはプロンプトキャッシュをサポートしていません")
+                
+                # Bedrock特有の設定
+                if provider == "Amazon Bedrock" and capabilities["cache_support"]:
+                    st.checkbox("Enable prompt cache", value=True, key="enable_prompt_cache")
+            else:
+                st.error(f"Provider {provider} not configured")
 
             chat_history_dir = st.text_input(
                 "chat_history_dir", value=config["chat_history_dir"]
@@ -189,17 +298,27 @@ async def main():
                 elif "image" in content:
                     st.image(content["image"]["source"]["bytes"])
 
+    # プロバイダーの取得
+    provider_name = st.session_state.get("provider", "OpenAI")
+    provider_key = provider_name.lower().replace(" ", "")
+    if provider_key == "amazonbedrock":
+        provider_key = "bedrock"
+    
+    # モデル機能の取得
+    capabilities = get_model_capabilities(provider_key, st.session_state.model_id, config)
+    
     enable_prompt_cache_system = False
     enable_prompt_cache_tools = False
     enable_prompt_cache_messages = False
 
-    if st.session_state.enable_prompt_cache:
-        cache_support = models[st.session_state.model_id]["cache_support"]
+    # Bedrockの場合のみキャッシュ設定を確認
+    if provider_key == "bedrock" and st.session_state.get("enable_prompt_cache", False):
+        cache_support = capabilities.get("cache_support", [])
         enable_prompt_cache_system = True if "system" in cache_support else False
         enable_prompt_cache_tools = True if "tools" in cache_support else False
         enable_prompt_cache_messages = True if "messages" in cache_support else False
 
-    image_support: bool = models[st.session_state.model_id]["image_support"]
+    image_support: bool = capabilities.get("image_support", False)
 
     if prompt := st.chat_input(accept_file="multiple", file_type=format["image"]):
         with st.chat_message("user"):
@@ -258,13 +377,19 @@ async def main():
 
             tools = mcp_tools + builtin_tools
 
+            # モデルの初期化
+            model = initialize_model(
+                provider=provider_key,
+                model_id=st.session_state.model_id,
+                config=config,
+                enable_cache={
+                    "system": enable_prompt_cache_system,
+                    "tools": enable_prompt_cache_tools
+                }
+            )
+            
             agent = Agent(
-                model=BedrockModel(
-                    model_id=st.session_state.model_id,
-                    boto_session=boto3.Session(region_name=bedrock_region),
-                    cache_prompt="default" if enable_prompt_cache_system else None,
-                    cache_tools="default" if enable_prompt_cache_tools else None,
-                ),
+                model=model,
                 system_prompt="あなたは優秀なAIエージェントです！",
                 messages=convert_messages(
                     messages, enable_cache=enable_prompt_cache_messages

@@ -1,17 +1,17 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+このファイルは、このリポジトリでコードを扱う際のClaude Code（claude.ai/code）へのガイダンスを提供します。
 
 ## プロジェクト概要
 
-AWS BedrockのLLMモデルを使用したエンタープライズグレードのチャットアプリケーション。Strands agentフレームワークとMCP（Model Context Protocol）ツールシステムを統合し、高度な対話型AIインターフェースを提供。
+マルチプロバイダー対応のエンタープライズグレードチャットアプリケーション。OpenAI APIとAWS Bedrockの両方をサポートし、Strands agentフレームワークとMCP（Model Context Protocol）ツールシステムを統合した高度な対話型AIインターフェースを提供。
 
 ## 開発環境のセットアップ
 
 ### 前提条件
 - Python 3.12以上
-- AWS アカウントとBedrock アクセス権限
-- AWS認証情報の適切な設定（~/.aws/credentials または環境変数）
+- OpenAI APIキー（OpenAIモデル使用時）
+- AWS アカウントとBedrock アクセス権限（Bedrockモデル使用時）
 - Docker（一部MCPツール用）
 
 ### インストールと実行
@@ -22,11 +22,30 @@ pip install -e .
 # または uv を使用
 uv pip install -e .
 
+# 環境設定ファイルの作成
+cp .env.example .env
+# .envファイルを編集してAPIキーを設定
+
 # Streamlitアプリケーションの起動
 streamlit run app.py
+```
 
-# 環境変数の設定（必要に応じて）
-export DEV=true  # 開発モード有効化
+### 環境変数の設定
+
+`.env`ファイルで以下を設定：
+```bash
+# OpenAI API設定
+OPENAI_API_KEY=sk-xxxxxxxxxxxxxxxxxxxxxxxx
+
+# プロバイダー選択（openai または bedrock）
+DEFAULT_PROVIDER=openai
+
+# AWS設定（Bedrock使用時）
+# AWS_PROFILE=default
+# AWS_REGION=ap-northeast-1
+
+# 開発モード
+DEV=false
 ```
 
 ## アーキテクチャ詳細
@@ -34,8 +53,10 @@ export DEV=true  # 開発モード有効化
 ### コア技術スタック
 
 - **Streamlit**: WebUIフレームワーク
-- **Strands Agent Framework**: LLMインタラクションとツール管理
-- **AWS Bedrock**: LLMプロバイダー（Claude、Amazon Nova）
+- **Strands Agent Framework v0.1.6+**: LLMインタラクションとツール管理
+- **マルチプロバイダー対応**:
+  - **OpenAI API**: GPT-4o、GPT-4o Mini、GPT-4.1
+  - **AWS Bedrock**: Claude、Amazon Nova
 - **MCP（Model Context Protocol）**: 外部ツール統合プロトコル
 - **nest_asyncio**: 同期環境での非同期処理実現
 
@@ -43,18 +64,20 @@ export DEV=true  # 開発モード有効化
 
 1. **初期化フェーズ**
    - 設定ファイル（config/*.json）の読み込み
-   - 環境変数とAWS認証の検証
+   - 環境変数の検証（OpenAI APIキーまたはAWS認証）
    - Streamlit UIの構築
 
 2. **ユーザーインタラクションフェーズ**
-   - サイドバーでのモデル/ツール選択
-   - チャット履歴の管理（読み込み/保存）
-   - テキスト/画像入力の処理
+   - プロバイダー選択（OpenAI/Amazon Bedrock）
+   - モデル選択（プロバイダー別）
+   - MCPツール選択
+   - チャット履歴の管理
 
 3. **処理フェーズ**
-   - MCPツールの動的ロード（ExitStackパターン）
-   - エージェントの初期化と実行
-   - ストリーミングレスポンスの処理
+   - プロバイダー別モデル初期化
+   - MCPツールの動的ロード
+   - エージェントの実行
+   - ストリーミングレスポンス処理
 
 4. **結果表示フェーズ**
    - リアルタイムレスポンス表示
@@ -63,30 +86,32 @@ export DEV=true  # 開発モード有効化
 
 ### 重要な実装パターン
 
-#### 非同期処理の統合
+#### モデル初期化の抽象化
 ```python
-# app.pyでの実装
-import nest_asyncio
-nest_asyncio.apply()  # Streamlitの制約を回避
-
-async def streaming(stream):
-    async for chunk in stream:
-        # ストリーミング処理
+def initialize_model(provider: str, model_id: str, config: dict, enable_cache: dict):
+    if provider == "openai":
+        return OpenAIModel(
+            client_args={"api_key": api_key},
+            model_id=model_id,
+            params={"max_tokens": ..., "temperature": ...}
+        )
+    elif provider == "bedrock":
+        return BedrockModel(
+            model_id=model_id,
+            boto_session=boto3.Session(region_name=...),
+            cache_prompt=...,
+            cache_tools=...
+        )
 ```
 
-#### MCPクライアント管理
+#### プロバイダー別機能管理
 ```python
-with ExitStack() as stack:
-    for server_name, server_config in selected_mcp.items():
-        # クライアントの動的ロードと管理
-        client = stack.enter_context(StdioClient(server_name, server_config["command"]))
-```
-
-#### プロンプトキャッシング最適化
-```python
-def convert_messages(messages, enable_cache):
-    # 最新2つのユーザーターンにキャッシュポイントを追加
-    # パフォーマンス向上のための重要機能
+def get_model_capabilities(provider: str, model_id: str, config: dict) -> dict:
+    # プロバイダーとモデルに応じた機能を返す
+    # - image_support: 画像入力対応
+    # - cache_support: キャッシュ機能（Bedrockのみ）
+    # - streaming: ストリーミング対応
+    # - tools: ツール使用対応
 ```
 
 ## 設定ファイル詳細
@@ -94,54 +119,63 @@ def convert_messages(messages, enable_cache):
 ### config/config.json
 ```json
 {
-    "chat_history_dir": "chat_history",      // チャット履歴保存先
-    "mcp_config_file": "config/mcp.json",    // MCPツール設定
-    "bedrock_region": "ap-northeast-1",      // AWS リージョン
-    "models": {
-        "<model-id>": {
-            "cache_support": ["system", "messages", "tools"],  // キャッシュ可能要素
-            "image_support": true/false                        // 画像入力対応
+    "chat_history_dir": "chat_history",
+    "mcp_config_file": "config/mcp.json",
+    "providers": {
+        "openai": {
+            "models": {
+                "gpt-4o": {
+                    "display_name": "GPT-4o (最新・画像対応)",
+                    "image_support": true,
+                    "max_tokens": 16384,
+                    "cost_per_1k_tokens": {...}
+                },
+                "gpt-4.1": {
+                    "display_name": "GPT-4.1 (2025年4月リリース)",
+                    "image_support": true,
+                    "max_tokens": 16384,
+                    "cost_per_1k_tokens": {...}
+                }
+            }
+        },
+        "bedrock": {
+            "region": "ap-northeast-1",
+            "models": {
+                "us.anthropic.claude-3-5-sonnet-20241022-v2:0": {
+                    "display_name": "Claude 3.5 Sonnet",
+                    "cache_support": [],
+                    "image_support": true
+                }
+            }
         }
     }
 }
 ```
 
-### config/mcp.json
-```json
-{
-    "mcpServers": {
-        "server-name": {
-            "command": "実行コマンド",
-            "args": ["引数"]
-        }
-    }
-}
-```
+## サポートモデル一覧
 
-## チャット履歴フォーマット
+### OpenAI モデル
+- **GPT-4o**: 最新の統合モデル、画像入力対応
+- **GPT-4o Mini**: 高速・低コスト版、画像入力対応  
+- **GPT-4.1**: 2025年4月リリースの新モデル、画像入力対応
 
-YAMLファイルとして保存（例：chat_history/1747940369.yaml）：
-```yaml
-- content:
-  - text: "ユーザーメッセージ"
-  - image: {data: "base64エンコードデータ", format: "png"}  # 画像の場合
-  role: user
-- content:
-  - text: "アシスタントの応答"
-  - toolUse:
-      input: {...}
-      name: tool_name
-      toolUseId: "unique-id"
-  role: assistant
-```
+### AWS Bedrock モデル
+- **Claude Sonnet 4**: 最新版、プロンプトキャッシング対応
+- **Claude 3.7 Sonnet**: プロンプトキャッシング対応
+- **Claude 3.5 Sonnet**: スタンダード版
+- **Claude 3.5 Haiku**: 高速版
+- **Amazon Nova Premier/Pro/Lite/Micro**: Amazon独自モデル
 
 ## UI/UX仕様
 
 ### サイドバー機能
-- **モデル選択**: ドロップダウンでモデル切り替え
-- **プロンプトキャッシュ**: パフォーマンス最適化のトグル
-- **MCPツール選択**: 複数選択可能なチェックボックス
-- **チャット履歴**: 最新20件の履歴表示と選択
+- **プロバイダー選択**: OpenAI/Amazon Bedrockの切り替え
+- **モデル選択**: プロバイダー別のモデルリスト
+- **プロバイダー別設定**:
+  - OpenAI: Temperature調整スライダー
+  - Bedrock: プロンプトキャッシュトグル
+- **MCPツール選択**: 複数選択可能
+- **チャット履歴**: 最新20件の表示と選択
 - **新規チャット**: 新しい会話の開始
 
 ### メインチャット領域
@@ -150,34 +184,42 @@ YAMLファイルとして保存（例：chat_history/1747940369.yaml）：
 - **レスポンス表示**: ストリーミング対応のマークダウン表示
 - **ツール使用表示**: エキスパンダーでJSON形式表示
 
-## エラーハンドリングとバリデーション
+## エラーハンドリング
 
-### 画像サポート検証
+### API認証エラー
 ```python
-if not model_config.get("image_support", False) and uploaded_file:
-    st.warning("このモデルは画像はサポートしていません。画像は使用されません。")
+# OpenAI
+if not api_key:
+    st.error("🔑 OPENAI_API_KEY が設定されていません。.env ファイルを確認してください。")
+    st.stop()
+
+# Bedrock
+# boto3が自動的にAWS認証を処理
 ```
 
-### ファイル存在確認
-```python
-if Path(chat_history_file).exists():
-    # 安全な読み込み処理
-```
+### モデル制限の処理
+- OpenAIモデルの`max_tokens`制限を適切に設定
+- 画像非対応モデルでの警告表示
+- プロバイダー別の機能差異を明確化
 
 ## 開発時の注意事項
 
-### AWS認証
-- Bedrock APIアクセスには適切なIAMロールまたは認証情報が必要
-- デフォルトリージョンは `ap-northeast-1`（東京）
+### マルチプロバイダー対応
+- プロバイダー切り替え時の状態管理に注意
+- 各プロバイダーの制限事項を考慮
+- 機能の有無を適切にUIに反映
 
-### MCPツール実行
-- 一部のツールはDockerが必要（例：cdatakintone）
-- ツール実行時のタイムアウトやエラーハンドリングに注意
+### APIキー管理
+- OpenAI APIキーは環境変数で管理
+- AWS認証は標準的な方法（~/.aws/credentials、IAMロール等）で対応
+- .envファイルは絶対にコミットしない
 
 ### パフォーマンス最適化
-- プロンプトキャッシングを有効化して応答速度を向上
+- Bedrockのプロンプトキャッシングを活用
+- OpenAIのストリーミングレスポンスを効率的に処理
 - 大きな画像ファイルは自動的にbase64エンコード
 
-### デバッグ
-- `DEV`環境変数を設定してデバッグモードを有効化
-- Streamlitのエラーメッセージは画面上に表示される
+### デバッグとトラブルシューティング
+- `DEV`環境変数でデバッグモード有効化
+- プロバイダー別のエラーメッセージを適切に表示
+- Streamlitのセッション状態を活用した状態管理

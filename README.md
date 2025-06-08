@@ -1,84 +1,119 @@
 # Strands Agent Streamlit チャットアプリ
 
-StrandsフレームワークとAWS Bedrockモデルを活用したAIエージェントと対話するためのStreamlitベースのチャットアプリケーションです。
+Strands フレームワークを使用し、OpenAI APIとAWS Bedrockの両方に対応したAIエージェントチャットアプリケーション。
 
 ![](docs/image01.png)
 
 ## 概要
 
-このアプリケーションは、AWS Bedrockを通じて様々な大規模言語モデル（LLM）と対話するためのチャットインターフェースを提供します。以下の機能をサポートしています：
+このアプリケーションは、複数のLLMプロバイダー（OpenAI、AWS Bedrock）を通じて様々な大規模言語モデル（LLM）と対話するためのチャットインターフェースを提供します。以下の機能をサポート：
 
-- 複数のAWS Bedrockモデル（Claude、Nova）
-- 画像入力と処理（対応モデルのみ）
-- MCP（Model Context Protocol）を通じたツール使用
-- チャット履歴管理
-- パフォーマンス向上のためのプロンプトキャッシング
+- **マルチプロバイダー対応**: OpenAI（GPT-4o、GPT-4.1等）とAWS Bedrock（Claude、Nova）の両方をサポート
+- **画像入力と処理**: 画像入力をサポートするモデルでの画像アップロードと処理
+- **MCP（Model Context Protocol）によるツール利用**: 外部ツールとの統合
+- **チャット履歴管理**: 会話の保存と読み込み
+- **プロンプトキャッシング**: パフォーマンス向上のための設定可能なキャッシング（Bedrockのみ）
 
 ## 機能
 
-- **複数モデルサポート**: Amazon NovaやAnthropic Claudeモデルなど、様々なAWS Bedrockモデルから選択可能
-- **画像処理**: 画像入力をサポートするモデルで画像のアップロードと処理が可能
-- **ツール統合**: MCP（Model Context Protocol）を通じて外部ツールを使用
-- **チャット履歴**: 過去の会話を保存・読み込み
-- **プロンプトキャッシング**: 設定可能なプロンプトキャッシングでパフォーマンスを最適化
+- **複数モデルサポート**: 
+  - OpenAI: GPT-4o、GPT-4o Mini、GPT-4.1
+  - AWS Bedrock: Amazon Nova、Anthropic Claudeモデル
+- **画像処理**: 画像入力をサポートするモデルでの画像アップロードと処理
+- **ツール統合**: MCP（Model Context Protocol）による外部ツールの使用
+- **チャット履歴**: 過去の会話の保存と読み込み
+- **プロバイダー別最適化**: 各プロバイダーの特性に応じた機能提供
 
 ## 前提条件
 
 - Python 3.12以上
-- Bedrockアクセス権限を持つAWSアカウント
-- 適切に設定されたAWS認証情報
-- Docker（一部のMCPツール用）
+- OpenAI APIキー（OpenAIモデル使用時）
+- AWSアカウントとBedrockアクセス権限（Bedrockモデル使用時）
+- Docker（一部MCPツール用）
 
 ## インストール
 
-1. リポジトリをクローン：
-   ```
+1. リポジトリのクローン:
+   ```bash
    git clone https://github.com/moritalous/strands-agent-streamlit-chat.git
    cd strands-agent-streamlit-chat
    ```
 
-2. 依存関係をインストール：
-   ```
+2. 依存関係のインストール:
+   ```bash
    pip install -e .
    ```
    
-   またはuvを使用：
-   ```
+   またはuvを使用:
+   ```bash
    uv pip install -e .
+   ```
+
+3. 環境設定:
+   ```bash
+   cp .env.example .env
+   # .envファイルを編集してOpenAI APIキーを設定
    ```
 
 ## 設定
 
-アプリケーションは2つの主要な設定ファイルを使用します：
+### 環境変数（`.env`ファイル）
+
+```bash
+# OpenAI API設定
+OPENAI_API_KEY=sk-xxxxxxxxxxxxxxxxxxxxxxxx
+
+# デフォルトプロバイダー（openai または bedrock）
+DEFAULT_PROVIDER=openai
+
+# AWS設定（Bedrock使用時）
+# AWS_PROFILE=default
+# AWS_REGION=ap-northeast-1
+
+# 開発モード
+DEV=false
+```
 
 ### 1. `config/config.json`
 
-以下の設定を含みます：
-- チャット履歴ディレクトリ
-- MCP設定ファイルパス
-- AWS Bedrockリージョン
-- モデル設定（以下を含む）：
-  - キャッシュサポートオプション
-  - 画像サポート機能
+プロバイダーとモデルの設定:
 
-例：
 ```json
 {
     "chat_history_dir": "chat_history",
     "mcp_config_file": "config/mcp.json",
-    "bedrock_region": "us-east-1",
-    "models": {
-        "us.amazon.nova-premier-v1:0": {
-            "cache_support": [],
-            "image_support": true
+    "providers": {
+        "openai": {
+            "models": {
+                "gpt-4o": {
+                    "display_name": "GPT-4o (最新・画像対応)",
+                    "image_support": true,
+                    "max_tokens": 16384,
+                    "cost_per_1k_tokens": {
+                        "input": 0.005,
+                        "output": 0.015
+                    }
+                },
+                "gpt-4.1": {
+                    "display_name": "GPT-4.1 (2025年4月リリース)",
+                    "image_support": true,
+                    "max_tokens": 16384,
+                    "cost_per_1k_tokens": {
+                        "input": 0.01,
+                        "output": 0.03
+                    }
+                }
+            }
         },
-        "us.anthropic.claude-3-7-sonnet-20250219-v1:0": {
-            "cache_support": [
-                "system",
-                "messages",
-                "tools"
-            ],
-            "image_support": true
+        "bedrock": {
+            "region": "ap-northeast-1",
+            "models": {
+                "us.anthropic.claude-3-5-sonnet-20241022-v2:0": {
+                    "display_name": "Claude 3.5 Sonnet",
+                    "cache_support": [],
+                    "image_support": true
+                }
+            }
         }
     }
 }
@@ -86,9 +121,8 @@ StrandsフレームワークとAWS Bedrockモデルを活用したAIエージェ
 
 ### 2. `config/mcp.json`
 
-ツール統合のためのMCP（Model Context Protocol）サーバーを設定：
+MCP（Model Context Protocol）サーバーの設定:
 
-例：
 ```json
 {
     "mcpServers": {
@@ -116,14 +150,16 @@ StrandsフレームワークとAWS Bedrockモデルを活用したAIエージェ
 
 ## 使用方法
 
-1. Streamlitアプリケーションを起動：
-   ```
+1. Streamlitアプリケーションの起動:
+   ```bash
    streamlit run app.py
    ```
 
-2. Webインターフェースで：
-   - サイドバーのドロップダウンからモデルを選択
-   - 必要に応じてプロンプトキャッシングを有効/無効化
+2. Webインターフェースでの操作:
+   - サイドバーでプロバイダー（OpenAI/Amazon Bedrock）を選択
+   - ドロップダウンからモデルを選択
+   - OpenAIの場合はTemperatureを調整可能
+   - Bedrockの場合はプロンプトキャッシングの有効/無効を設定
    - 使用するMCPツールを選択
    - 新しいチャットを開始または既存のチャットを継続
    - メッセージを入力し、必要に応じて画像をアップロード
@@ -131,33 +167,60 @@ StrandsフレームワークとAWS Bedrockモデルを活用したAIエージェ
 
 ## チャット履歴
 
-チャット履歴は設定されたチャット履歴ディレクトリにYAMLファイルとして保存されます。以下が可能です：
-- 「New Chat」ボタンで新しいチャットを開始
-- サイドバーでファイル名をクリックして過去のチャットを読み込み
+チャット履歴は設定されたディレクトリにYAMLファイルとして保存されます：
+- 「新規チャット」ボタンで新しいチャットを開始
+- サイドバーのファイル名をクリックして過去のチャットを読み込み
+
+## サポートモデル
+
+### OpenAI モデル
+- **GPT-4o**: 最新の統合モデル、画像入力対応
+- **GPT-4o Mini**: 高速・低コスト版、画像入力対応
+- **GPT-4.1**: 2025年4月リリースの新モデル、画像入力対応
+
+### AWS Bedrock モデル
+- **Claude Sonnet 4**: 最新版、プロンプトキャッシング対応
+- **Claude 3.7 Sonnet**: プロンプトキャッシング対応
+- **Claude 3.5 Sonnet**: スタンダード版
+- **Claude 3.5 Haiku**: 高速版
+- **Amazon Nova Premier/Pro/Lite/Micro**: Amazon独自モデル
 
 ## MCPツール
 
-アプリケーションは様々なMCPツールをサポートします：
+アプリケーションは様々なMCPツールをサポート：
 - AWSドキュメントツール
-- シーケンシャル思考ツール
-- MCP設定を通じて追加ツールを追加可能
+- 順次思考ツール
+- MCP設定を通じて追加ツールの統合が可能
 
 ## 開発
 
-アプリケーションは以下で構築されています：
-- Streamlit（Webインターフェース）
-- Strandsフレームワーク（エージェント機能）
-- AWS Bedrock（LLMアクセス）
-- MCP（ツール統合）
+使用技術：
+- **Streamlit**: Webインターフェース
+- **Strands Framework v0.1.6+**: エージェント機能
+- **OpenAI API**: GPTモデルアクセス
+- **AWS Bedrock**: Claudeモデルアクセス
+- **MCP**: ツール統合
 
+## トラブルシューティング
+
+### OpenAI使用時のエラー
+- `OPENAI_API_KEY`が正しく設定されているか確認
+- APIキーの有効性を確認
+- モデルのmax_tokens制限に注意
+
+### Bedrock使用時のエラー
+- AWS認証情報が正しく設定されているか確認
+- Bedrockへのアクセス権限を確認
+- リージョン設定が正しいか確認
 
 ## ライセンス
 
-このプロジェクトはApache License 2.0のもとでライセンスされています - 詳細は[LICENSE](LICENSE)ファイルを参照してください。
+このプロジェクトはApache License 2.0でライセンスされています。詳細は[LICENSE](LICENSE)ファイルを参照してください。
 
 ## 謝辞
 
-- Strands Agentsフレームワーク
+- Strands Agents フレームワーク
+- OpenAI
 - AWS Bedrock
 - Streamlit
-- MCP（Model Context Protocol）
+- MCP (Model Context Protocol)
